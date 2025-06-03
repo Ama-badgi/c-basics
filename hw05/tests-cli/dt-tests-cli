@@ -1,0 +1,259 @@
+#!/bin/sh
+
+
+#   ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+#   ┃   𝐃𝐎 𝐍𝐎𝐓 𝐄𝐃𝐈𝐓 𝐓𝐇𝐈𝐒 𝐅𝐈𝐋𝐄   ┃
+#   ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+
+# This is a test suite runner. You will find no tests here.
+# Look for files named ‹test-*.sh› instead.
+
+
+
+script_path=$(readlink --canonicalize "$0")
+script_bin=$(dirname "${script_path}")
+
+_cnt_total=0
+_cnt_ok=0
+
+_can_run() {
+	type "$1" >/dev/null 2>&1
+}
+
+_hook_run() {
+	if ! _can_run "$1"; then
+		return 0
+	fi
+
+	"$@"
+}
+
+
+_msg_dirty=0
+
+_msg_clear() {
+	if [ $_msg_dirty -eq 1 ]; then
+		echo
+		_msg_dirty=0
+	fi
+}
+
+_msg_test() {
+	: $((_cnt_total += 1))
+	_msg_context="$@"
+	_msg_dirty=1
+	printf "[\e[36m -> \e[0m]  $_msg_context\r"
+}
+
+_msg_fatal() {
+	_msg_clear
+	printf "[\e[91m****\e[0m]  ${_msg_context:-Fatal error}: \e[31m$@\e[0m\n"
+	exit 255
+}
+
+_msg_suite() {
+	if [ $_cnt_total -gt 0 ]; then
+		echo
+		echo
+	fi
+
+	printf "\e[36m======\e[0m  \e[1m$@\e[0m\n"
+	echo
+}
+
+_msg_info() {
+	_msg_clear
+	printf "[\e[34m -- \e[0m]  $@\n"
+}
+
+_msg_warn() {
+	_msg_clear
+	printf "[\e[33m !! \e[0m]  $@\n"
+}
+
+_msg_fail() {
+	_msg_clear
+	printf "[\e[31mFAIL\e[0m]  $_msg_context${@:+: $@}\n"
+}
+
+_msg_ok() {
+	: $((_cnt_ok += 1))
+	_msg_dirty=0
+	printf "[\e[32m OK \e[0m]  $_msg_context${@:+: $@}\n"
+}
+
+_msg_clear_context() {
+	_msg_context=""
+}
+
+_run_validate() {
+	for file in $@; do
+		if [ ! -f "$file" ]; then
+			_msg_fatal "File $file does not exist"
+		fi
+	done
+}
+
+_run_cleanup() {
+	for object in $@; do
+		chmod -R "u+rwX" "$object"
+		rm -r "$object"
+	done
+}
+
+_run_check_exit() {
+	actual=$1
+	expected=$2
+
+	if [ $expected -eq 0 ] && [ $actual -ne 0 ]; then
+		_msg_fail "Program exited with $actual but 0 was expected"
+		return 1
+	fi
+
+	if [ $expected -lt 0 ] && [ $actual -eq 0 ]; then
+		_msg_fail "Program exited with $actual but non-zero was expected"
+		return 1
+	fi
+
+	if [ $expected -gt 0 ] && [ $actual -ne $expected ]; then
+		_msg_fail "Program exited with $actual but $expected was expected"
+		return 1
+	fi
+
+	return 0
+}
+
+_run_diff() {
+	patch="$stash/$1.diff"
+	if [ ! -f "$3" ]; then
+		_msg_warn "File $3 does not exist, assumed empty"
+	fi
+
+	if ! diff -U5 --new-file "$2" "$3" >${patch}; then
+		_msg_fail "Output '$1' differs"
+		cat ${patch}
+		return 1
+	fi
+
+	return 0
+}
+
+_run_check_output() {
+	kind=$1
+	actual=$2
+	expected=$3
+
+	if type "_run_check_$kind" >/dev/null 2>&1; then
+		if ! "_run_check_$kind" $actual $expected; then
+			return 1
+		fi
+	elif ! _run_diff $@; then
+		return 1
+	fi
+
+	return 0
+}
+
+run() {
+	OPTIND=1
+	while getopts "e:" opt; do
+		case "$opt" in
+		e)
+			exp_exit=$OPTARG
+			;;
+		*)
+			exit 1
+			;;
+		esac
+	done
+
+	shift $((OPTIND - 1))
+
+	if [ "$#" -lt 2 ]; then
+		_msg_fatal "usage: run DESCRIPTION TEST [ARGS...]"
+	fi
+
+	desc=$1
+	shift
+
+	exp_out="${script_bin}/data/$1.out"
+	exp_err="${script_bin}/data/$1.err"
+
+	stash=$(mktemp --directory --tmpdir=${script_bin} stash.XXXXXX.d)
+
+	prog_out="$stash/stdout"
+	prog_err="$stash/stderr"
+
+	workdir=$(mktemp --directory --tmpdir=${script_bin} runtime.XXXXXX.d)
+
+	trap "_run_cleanup $workdir $stash" EXIT TERM INT
+
+	_msg_test "{$((_cnt_total + 1))} ${desc}"
+	(
+		cd $workdir
+		"$@"
+	) 3>&1 >$prog_out 2>$prog_err
+
+	exit_code=$?
+
+	fails=0
+	if ! _run_check_exit $exit_code ${exp_exit:-0}; then
+		: $((fails += 1))
+	fi
+
+	if [ -f "$stash/valgrind.log" ] && ! grep -q 'ERROR SUMMARY: 0 errors' "$stash/valgrind.log"; then
+		_msg_fail "Valgrind found errors"
+		cat "$stash/valgrind.log"
+		: $((fails += 1))
+	fi
+
+	if ! _run_check_output stdout $prog_out $exp_out; then
+		: $((fails += 1))
+	fi
+
+	if ! _run_check_output stderr $prog_err $exp_err; then
+		: $((fails += 1))
+	fi
+
+	if [ $fails -eq 0 ]; then
+		_msg_ok
+	else
+		echo
+	fi
+
+	_msg_clear_context
+	_run_cleanup "$workdir" "$stash"
+	trap - EXIT TERM INT
+}
+
+if [ -f "${script_bin}"/test-utils.sh ]; then
+	. "${script_bin}"/test-utils.sh
+fi
+
+_hook_run utils_init
+
+for file in "${script_bin}"/tests-*.sh; do
+	_msg_suite "$(basename $file)"
+	. $file
+done
+
+if [ $_cnt_total -eq 0 ]; then
+	_msg_crit "No tests were run"
+fi
+
+echo
+
+if [ $_cnt_ok -ne $_cnt_total ]; then
+	printf "Overall status: \e[1;31m✗ FAILURE\e[0m\n"
+else
+	printf "Overall status: \e[1;32m✔ Great Success\e[0m\n"
+fi
+
+printf "  Total tests:  $_cnt_total\n"
+printf "  Success:      $_cnt_ok\n"
+printf "  Failure       $((_cnt_total - _cnt_ok))\n"
+
+if [ $_cnt_ok -ne $_cnt_total ]; then
+	exit 1
+fi

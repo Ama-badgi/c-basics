@@ -1,0 +1,17 @@
+?  808.0 KiB root
+   104.0 KiB |-- bin
+     8.0 KiB |   |-- ls
+    96.0 KiB |   \-- tar
+     4.0 KiB |-- file1
+     4.0 KiB |-- file10
+     4.0 KiB |-- file2
+     4.0 KiB |-- file3
+     4.0 KiB |-- file4
+     4.0 KiB |-- file5
+     4.0 KiB |-- file6
+     4.0 KiB |-- file7
+     4.0 KiB |-- file8
+     4.0 KiB |-- file9
+   664.0 KiB |-- lib
+   664.0 KiB |   \-- libc.a
+?    0.0 B   \-- secrets
